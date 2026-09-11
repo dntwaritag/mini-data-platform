@@ -1,0 +1,209 @@
+name: mini-data-platform
+
+networks:
+  platform-net:
+    name: mini-data-platform-net
+    driver: bridge
+
+volumes:
+  postgres-data:
+  minio-data:
+  airflow-metadata-data:
+  airflow-logs:
+  metabase-data:
+
+services:
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL — analytical store for cleaned/transformed sales data
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: mdp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mini_data_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-platform_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-platform_pass}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-platform_user} -d ${POSTGRES_DB:-mini_data_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - platform-net
+
+  # -------------------------------------------------------------------------
+  # Airflow metadata database — dedicated Postgres instance, kept separate
+  # from the analytics `postgres` service on purpose (Airflow owns its own
+  # metadata DB; the analytics DB stores the actual business data).
+  # -------------------------------------------------------------------------
+  airflow-metadata-db:
+    image: postgres:16-alpine
+    container_name: mdp-airflow-metadata-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${AIRFLOW_DB:-airflow}
+      POSTGRES_USER: ${AIRFLOW_DB_USER:-airflow}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+    volumes:
+      - airflow-metadata-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AIRFLOW_DB_USER:-airflow} -d ${AIRFLOW_DB:-airflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - platform-net
+
+  # -------------------------------------------------------------------------
+  # MinIO — S3-compatible object storage for raw CSV ingestion
+  # -------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    container_name: mdp-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_password}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - platform-net
+
+  # -------------------------------------------------------------------------
+  # Airflow — orchestration
+  # -------------------------------------------------------------------------
+  airflow-init:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    container_name: mdp-airflow-init
+    depends_on:
+      airflow-metadata-db:
+        condition: service_healthy
+    environment: &airflow-common-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-metadata-db:5432/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_password}
+      MINIO_BUCKET: ${MINIO_BUCKET:-raw-data}
+      ANALYTICS_DB_HOST: postgres
+      ANALYTICS_DB_NAME: ${POSTGRES_DB:-mini_data_platform}
+      ANALYTICS_DB_USER: ${POSTGRES_USER:-platform_user}
+      ANALYTICS_DB_PASSWORD: ${POSTGRES_PASSWORD:-platform_pass}
+    entrypoint: /bin/bash
+    command: -c "airflow db migrate && airflow users create --username ${AIRFLOW_ADMIN_USER:-admin} --password ${AIRFLOW_ADMIN_PASSWORD:-admin} --firstname Admin --lastname User --role Admin --email admin@example.com || true"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+    networks:
+      - platform-net
+
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    container_name: mdp-airflow-webserver
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment: *airflow-common-env
+    command: webserver
+    ports:
+      - "${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - platform-net
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    container_name: mdp-airflow-scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment: *airflow-common-env
+    command: scheduler
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$$(hostname)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - platform-net
+
+  # -------------------------------------------------------------------------
+  # Metabase — BI/dashboarding against PostgreSQL
+  #
+  # Uses its own bundled H2 file database (persisted in the metabase-data
+  # volume) for Metabase's *application* metadata (dashboards, users,
+  # saved questions) rather than a second Postgres database. This keeps the
+  # compose file simpler for a local/academic deployment; see
+  # "Architecture decisions" in the README for the trade-off.
+  # -------------------------------------------------------------------------
+  metabase:
+    image: metabase/metabase:v0.50.8
+    container_name: mdp-metabase
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MB_DB_FILE: /metabase-data/metabase.db
+    ports:
+      - "${METABASE_PORT:-3000}:3000"
+    volumes:
+      - metabase-data:/metabase-data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - platform-net

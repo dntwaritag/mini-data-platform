@@ -1,0 +1,11 @@
+# Shared dev/test dependencies (Airflow and the data generator pin their own
+# requirements separately inside data_generator/ and docker/airflow/).
+pandas==2.2.2
+numpy==1.26.4
+minio==7.2.7
+psycopg2-binary==2.9.9
+pytest==8.2.2
+ruff==0.5.0
+requests==2.32.3
+PyYAML==6.0.1
+Faker==25.9.1

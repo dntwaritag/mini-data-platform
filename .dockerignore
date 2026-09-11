@@ -1,0 +1,14 @@
+.git
+.gitignore
+.github
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.env
+logs/
+data/
+*.csv
+*.zip
+README.md
+dashboards/
