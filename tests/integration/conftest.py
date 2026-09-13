@@ -27,6 +27,10 @@ MINIO_ROOT_PASSWORD = os.environ.get("MINIO_ROOT_PASSWORD", "minio_password")
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "raw-data")
 
 AIRFLOW_BASE_URL = os.environ.get("AIRFLOW_BASE_URL", "http://localhost:8080")
+AIRFLOW_AUTH = (
+    os.environ.get("AIRFLOW_ADMIN_USER", "admin"),
+    os.environ.get("AIRFLOW_ADMIN_PASSWORD", "admin"),
+)
 METABASE_BASE_URL = os.environ.get("METABASE_BASE_URL", "http://localhost:3000")
 
 

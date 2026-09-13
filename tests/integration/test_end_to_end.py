@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import requests
 
-from .conftest import AIRFLOW_BASE_URL, METABASE_BASE_URL, MINIO_BUCKET
+from .conftest import AIRFLOW_AUTH, AIRFLOW_BASE_URL, METABASE_BASE_URL, MINIO_BUCKET
 
 
 def test_minio_bucket_exists(minio_client):
@@ -24,7 +24,7 @@ def test_minio_bucket_exists(minio_client):
 
 
 def test_airflow_dag_is_registered():
-    resp = requests.get(f"{AIRFLOW_BASE_URL}/api/v1/dags/sales_pipeline", timeout=10, auth=("admin", "admin"))
+    resp = requests.get(f"{AIRFLOW_BASE_URL}/api/v1/dags/sales_pipeline", timeout=10, auth=AIRFLOW_AUTH)
     assert resp.status_code == 200, f"sales_pipeline DAG not found via Airflow API: {resp.status_code}"
     body = resp.json()
     assert body.get("is_paused") in (True, False)  # DAG metadata parses as expected

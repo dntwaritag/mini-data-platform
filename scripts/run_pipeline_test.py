@@ -16,6 +16,7 @@ Steps:
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -32,7 +33,20 @@ logger = logging.getLogger(__name__)
 AIRFLOW_URL = "http://localhost:8080"
 METABASE_URL = "http://localhost:3000"
 MINIO_ENDPOINT = "localhost:9000"
-POSTGRES_DSN = dict(host="localhost", port=5432, dbname="mini_data_platform", user="platform_user", password="platform_pass")
+
+POSTGRES_DSN = dict(
+    host="localhost",
+    port=5432,
+    dbname=os.environ.get("POSTGRES_DB", "mini_data_platform"),
+    user=os.environ.get("POSTGRES_USER", "platform_user"),
+    password=os.environ.get("POSTGRES_PASSWORD", "platform_pass"),
+)
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ROOT_USER", "minio_admin")
+MINIO_SECRET_KEY = os.environ.get("MINIO_ROOT_PASSWORD", "minio_password")
+AIRFLOW_AUTH = (
+    os.environ.get("AIRFLOW_ADMIN_USER", "admin"),
+    os.environ.get("AIRFLOW_ADMIN_PASSWORD", "admin"),
+)
 
 POLL_INTERVAL_SECONDS = 5
 TIMEOUT_SECONDS = 300
@@ -53,7 +67,7 @@ def wait_for(name: str, check_fn, timeout: int = TIMEOUT_SECONDS) -> None:
 
 def wait_for_services() -> None:
     wait_for("PostgreSQL", lambda: psycopg2.connect(**POSTGRES_DSN, connect_timeout=3).close() or True)
-    wait_for("MinIO", lambda: Minio(MINIO_ENDPOINT, access_key="minio_admin", secret_key="minio_password", secure=False).list_buckets() is not None)
+    wait_for("MinIO", lambda: Minio(MINIO_ENDPOINT, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=False).list_buckets() is not None)
     wait_for("Airflow", lambda: requests.get(f"{AIRFLOW_URL}/health", timeout=5).status_code == 200)
     wait_for("Metabase", lambda: requests.get(f"{METABASE_URL}/api/health", timeout=5).status_code == 200)
 
@@ -69,14 +83,16 @@ def generate_and_upload() -> None:
     )
 
 
-def trigger_dag(auth=("admin", "admin")) -> str:
+def trigger_dag(auth=None) -> str:
+    auth = auth or AIRFLOW_AUTH
     requests.patch(f"{AIRFLOW_URL}/api/v1/dags/sales_pipeline", json={"is_paused": False}, auth=auth, timeout=10)
     resp = requests.post(f"{AIRFLOW_URL}/api/v1/dags/sales_pipeline/dagRuns", json={}, auth=auth, timeout=10)
     resp.raise_for_status()
     return resp.json()["dag_run_id"]
 
 
-def wait_for_dag_run(dag_run_id: str, auth=("admin", "admin")) -> str:
+def wait_for_dag_run(dag_run_id: str, auth=None) -> str:
+    auth = auth or AIRFLOW_AUTH
     deadline = time.time() + TIMEOUT_SECONDS
     while time.time() < deadline:
         resp = requests.get(

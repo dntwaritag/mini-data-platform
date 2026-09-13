@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -42,7 +42,7 @@ jobs:
     needs: lint-and-unit-test
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Copy .env.example to .env
         run: cp .env.example .env
@@ -59,10 +59,10 @@ jobs:
     needs: build-and-validate-compose
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -72,6 +72,9 @@ jobs:
 
       - name: Copy .env.example to .env
         run: cp .env.example .env
+
+      - name: Export .env into the job environment
+        run: grep -v '^#' .env | grep -v '^$' >> "$GITHUB_ENV"
 
       - name: Start the platform
         run: docker compose up -d --build
