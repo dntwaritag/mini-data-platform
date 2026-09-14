@@ -67,7 +67,7 @@ services:
   # MinIO — S3-compatible object storage for raw CSV ingestion
   # -------------------------------------------------------------------------
   minio:
-    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    image: quay.io/minio/minio:RELEASE.2024-06-13T22-53-53Z
     container_name: mdp-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
