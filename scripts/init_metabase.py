@@ -23,10 +23,37 @@ import argparse
 import logging
 import os
 import sys
+import time
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+WAIT_FOR_HEALTH_TIMEOUT_SECONDS = 180
+WAIT_FOR_HEALTH_POLL_INTERVAL_SECONDS = 5
+
+
+def wait_for_metabase_health(metabase_url: str, timeout: int = WAIT_FOR_HEALTH_TIMEOUT_SECONDS) -> bool:
+    """Poll Metabase's own health endpoint until it reports healthy.
+
+    A fresh Metabase instance runs a large Liquibase migration on first boot
+    (hundreds of migrations against its H2 app database) and can take well
+    over 30 seconds before it answers requests at all. Calling the setup API
+    before that finishes gets a connection reset, not a clean error — so
+    this wait is not optional; checking docker's health status once and
+    moving on is not enough.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            resp = requests.get(f"{metabase_url}/api/health", timeout=5)
+            if resp.status_code == 200:
+                return True
+        except requests.RequestException:
+            pass
+        logger.info("Waiting for Metabase to finish starting...")
+        time.sleep(WAIT_FOR_HEALTH_POLL_INTERVAL_SECONDS)
+    return False
 
 
 def get_setup_token(metabase_url: str) -> str | None:
@@ -107,6 +134,16 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+
+    logger.info("Waiting for Metabase to be reachable...")
+    if not wait_for_metabase_health(args.metabase_url):
+        print(
+            f"Metabase did not become healthy within {WAIT_FOR_HEALTH_TIMEOUT_SECONDS}s. "
+            "Check `docker compose ps metabase` / `docker compose logs metabase`, "
+            "then follow the manual setup steps in dashboards/README.md.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     token = get_setup_token(args.metabase_url)
     if not token:
