@@ -239,15 +239,24 @@ Full detail is in the `dags/pipeline/cleaning.py` module docstring; summary:
 
 ## Limitations
 
-* **This repository was implemented and unit-tested in a sandboxed
-  environment with no Docker daemon available.** Every Python module
-  (generator, cleaning, transform, load, ingestion, validation) was
-  actually executed and unit tested (33 unit tests, all passing, against
-  mocked MinIO/Postgres clients where a live service would normally be
-  used). `docker compose build`/`up`, live Airflow DAG execution, and the
-  Metabase dashboard were written and reviewed but **not run end-to-end**
-  in this environment. Run `make build up pipeline` and the CI workflow on
-  a machine with Docker to get that confirmation.
+* **Initial implementation was built and unit-tested in a sandboxed
+  environment with no Docker daemon available** (33 unit tests, all passing,
+  against mocked MinIO/Postgres clients). The full stack has since been
+  **verified end-to-end on a real machine**: `docker compose up`, live
+  Airflow DAG execution against real MinIO/PostgreSQL/Metabase containers,
+  and the full integration test suite (`tests/integration`, 6/6 passing)
+  have all been run and confirmed working. Getting there surfaced and fixed
+  several real issues along the way -- worth knowing about if you hit them
+  on a fresh clone: MinIO's Docker Hub organization was withdrawn (fixed by
+  pointing at `quay.io/minio/minio`); Airflow's REST API rejects HTTP Basic
+  Auth unless `basic_auth` is explicitly added to `AIRFLOW__API__AUTH_BACKENDS`;
+  the DAG needs a moment to be parsed and registered by the scheduler before
+  it can be triggered; `make` does not load `.env` into recipe environments
+  by default (the Makefile now does this via `include .env` / `export`);
+  and the `minio` Python package must be present in the Airflow image
+  (`docker/airflow/requirements.txt`) since `dags/pipeline/ingestion.py`
+  uses it directly. All of these are already fixed in this repository --
+  listed here so the reasoning is visible, not as outstanding work.
 * Metabase dashboard/card creation is documented manually rather than
   fully API-automated (see `dashboards/README.md` for why).
 * Airflow uses `LocalExecutor` -- fine for a single-node local deployment,
