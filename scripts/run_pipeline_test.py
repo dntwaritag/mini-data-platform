@@ -83,6 +83,19 @@ def generate_and_upload() -> None:
     )
 
 
+def wait_for_dag_registered(dag_id: str = "sales_pipeline", auth=None, timeout: int = 120) -> None:
+    """The scheduler needs time to parse dags/sales_pipeline.py and register
+    it in its metadata DB after becoming healthy — trigger_dag() 404s if
+    called before that finishes, so wait for the DAG itself, not just the
+    webserver's /health endpoint."""
+    auth = auth or AIRFLOW_AUTH
+    wait_for(
+        f"DAG '{dag_id}' registration",
+        lambda: requests.get(f"{AIRFLOW_URL}/api/v1/dags/{dag_id}", auth=auth, timeout=5).status_code == 200,
+        timeout=timeout,
+    )
+
+
 def trigger_dag(auth=None) -> str:
     auth = auth or AIRFLOW_AUTH
     requests.patch(f"{AIRFLOW_URL}/api/v1/dags/sales_pipeline", json={"is_paused": False}, auth=auth, timeout=10)
@@ -114,6 +127,9 @@ def main() -> None:
 
     logger.info("Generating and uploading test data...")
     generate_and_upload()
+
+    logger.info("Waiting for the sales_pipeline DAG to be registered by the scheduler...")
+    wait_for_dag_registered()
 
     logger.info("Triggering sales_pipeline DAG...")
     dag_run_id = trigger_dag()
