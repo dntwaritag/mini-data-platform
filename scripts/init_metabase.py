@@ -156,7 +156,16 @@ def run_setup(
     db_name: str,
     db_user: str,
     db_password: str,
-) -> bool:
+) -> str:
+    """Returns 'created', 'already_configured', or 'failed'.
+
+    A truthy setup-token from /api/session/properties does not reliably
+    mean setup hasn't happened yet on this version — it can still be
+    present after an admin account exists, and /api/setup then rejects the
+    call with 403. That case is treated as 'already_configured', not a
+    failure: main() falls through to logging in and verifying the database
+    directly either way.
+    """
     payload = {
         "token": setup_token,
         "user": {
@@ -182,12 +191,15 @@ def run_setup(
     }
 
     resp = requests.post(f"{metabase_url}/api/setup", json=payload, timeout=30)
+    if resp.status_code == 403 and "currently exists" in resp.text:
+        logger.info("Admin account already exists (setup-token was stale) — will verify the database separately.")
+        return "already_configured"
     if resp.status_code >= 400:
         logger.error("Metabase setup request failed (%s): %s", resp.status_code, resp.text[:500])
-        return False
+        return "failed"
 
-    logger.info("Metabase admin account and PostgreSQL data source created successfully.")
-    return True
+    logger.info("Metabase admin account created successfully via /api/setup.")
+    return "created"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -220,7 +232,7 @@ def main(argv: list[str] | None = None) -> None:
 
     token = get_setup_token(args.metabase_url)
     if token:
-        ok = run_setup(
+        result = run_setup(
             args.metabase_url,
             token,
             args.admin_email,
@@ -231,15 +243,17 @@ def main(argv: list[str] | None = None) -> None:
             args.db_user,
             args.db_password,
         )
-        if not ok:
+        if result == "failed":
             print(
-                "Automated admin/database setup failed. Follow the manual setup steps "
+                "Automated admin setup failed. Follow the manual setup steps "
                 "in dashboards/README.md instead.",
                 file=sys.stderr,
             )
             sys.exit(1)
+        # result is "created" or "already_configured" — either way, fall
+        # through to verifying the database below.
     else:
-        logger.info("Admin account already exists — skipping /api/setup, will still verify the database below.")
+        logger.info("No setup-token available — will verify the database below.")
 
     # Whether /api/setup ran or not, don't trust it to have reliably created
     # the database (observed: it can report success for the admin account
