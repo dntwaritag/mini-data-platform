@@ -29,6 +29,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+DATABASE_NAME = "Sales Analytics (PostgreSQL)"
+
 WAIT_FOR_HEALTH_TIMEOUT_SECONDS = 180
 WAIT_FOR_HEALTH_POLL_INTERVAL_SECONDS = 5
 
@@ -54,6 +56,77 @@ def wait_for_metabase_health(metabase_url: str, timeout: int = WAIT_FOR_HEALTH_T
         logger.info("Waiting for Metabase to finish starting...")
         time.sleep(WAIT_FOR_HEALTH_POLL_INTERVAL_SECONDS)
     return False
+
+
+def login(metabase_url: str, email: str, password: str) -> str:
+    resp = requests.post(f"{metabase_url}/api/session", json={"username": email, "password": password}, timeout=15)
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+
+def find_database(metabase_url: str, session_id: str, name: str) -> int | None:
+    resp = requests.get(f"{metabase_url}/api/database", headers={"X-Metabase-Session": session_id}, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    databases = data.get("data", data) if isinstance(data, dict) else data
+    for db in databases:
+        if db["name"] == name:
+            return db["id"]
+    return None
+
+
+def create_database(
+    metabase_url: str,
+    session_id: str,
+    name: str,
+    db_host: str,
+    db_port: int,
+    db_name: str,
+    db_user: str,
+    db_password: str,
+) -> int:
+    payload = {
+        "engine": "postgres",
+        "name": name,
+        "details": {
+            "host": db_host,
+            "port": db_port,
+            "dbname": db_name,
+            "user": db_user,
+            "password": db_password,
+            "ssl": False,
+        },
+    }
+    resp = requests.post(
+        f"{metabase_url}/api/database", headers={"X-Metabase-Session": session_id}, json=payload, timeout=30
+    )
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+
+def ensure_database(
+    metabase_url: str,
+    session_id: str,
+    name: str,
+    db_host: str,
+    db_port: int,
+    db_name: str,
+    db_user: str,
+    db_password: str,
+) -> int:
+    """Guarantee the PostgreSQL data source exists in Metabase, creating it
+    if needed. Does not rely on /api/setup having created it — that call
+    can report success for the admin-account portion while silently
+    dropping the bundled database creation, at least on v0.50.8."""
+    existing_id = find_database(metabase_url, session_id, name)
+    if existing_id is not None:
+        logger.info("Database '%s' already exists (id=%s)", name, existing_id)
+        return existing_id
+
+    logger.info("Database '%s' not found — creating it explicitly via /api/database", name)
+    db_id = create_database(metabase_url, session_id, name, db_host, db_port, db_name, db_user, db_password)
+    logger.info("Created database '%s' (id=%s)", name, db_id)
+    return db_id
 
 
 def get_setup_token(metabase_url: str) -> str | None:
@@ -95,7 +168,7 @@ def run_setup(
         },
         "database": {
             "engine": "postgres",
-            "name": "Sales Analytics (PostgreSQL)",
+            "name": DATABASE_NAME,
             "details": {
                 "host": db_host,
                 "port": db_port,
@@ -146,31 +219,65 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     token = get_setup_token(args.metabase_url)
-    if not token:
+    if token:
+        ok = run_setup(
+            args.metabase_url,
+            token,
+            args.admin_email,
+            args.admin_password,
+            args.db_host,
+            args.db_port,
+            args.db_name,
+            args.db_user,
+            args.db_password,
+        )
+        if not ok:
+            print(
+                "Automated admin/database setup failed. Follow the manual setup steps "
+                "in dashboards/README.md instead.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        logger.info("Admin account already exists — skipping /api/setup, will still verify the database below.")
+
+    # Whether /api/setup ran or not, don't trust it to have reliably created
+    # the database (observed: it can report success for the admin account
+    # while silently dropping the bundled database creation). Log in and
+    # verify/create it explicitly instead.
+    try:
+        session_id = login(args.metabase_url, args.admin_email, args.admin_password)
+    except requests.RequestException as exc:
         print(
-            "Automated setup is not available (Metabase unreachable or already configured).\n"
+            f"Could not log in to verify the database connection: {exc}\n"
+            "If the admin account was just created with different credentials than "
+            "--admin-email/--admin-password (or METABASE_ADMIN_EMAIL/PASSWORD in .env), "
+            "log in manually and add the database via dashboards/README.md instead.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        ensure_database(
+            args.metabase_url,
+            session_id,
+            DATABASE_NAME,
+            args.db_host,
+            args.db_port,
+            args.db_name,
+            args.db_user,
+            args.db_password,
+        )
+    except requests.RequestException as exc:
+        body = getattr(exc.response, "text", "")[:500] if getattr(exc, "response", None) is not None else ""
+        print(
+            f"Could not verify/create the database connection: {exc}\n{body}\n"
             "Follow the manual setup steps in dashboards/README.md instead.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    ok = run_setup(
-        args.metabase_url,
-        token,
-        args.admin_email,
-        args.admin_password,
-        args.db_host,
-        args.db_port,
-        args.db_name,
-        args.db_user,
-        args.db_password,
-    )
-    if not ok:
-        print(
-            "Automated setup failed. Follow the manual setup steps in dashboards/README.md instead.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    logger.info("Metabase admin account and PostgreSQL data source are ready.")
 
 
 if __name__ == "__main__":
