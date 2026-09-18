@@ -1,8 +1,8 @@
 """Best-effort automated Metabase dashboard build.
 
-Creates the 8 cards (4 KPIs + 4 charts) documented in dashboards/README.md
-and assembles them into a "Sales Overview" dashboard, via the Metabase
-REST API.
+Creates the 16 cards (8 core revenue KPIs/charts + 8 e-commerce insight
+cards) documented in dashboards/README.md and assembles them into a
+"Sales Overview" dashboard, via the Metabase REST API.
 
 This is intentionally more fragile than scripts/init_metabase.py: Metabase's
 card/dashboard-layout API has changed shape across versions, and this script
@@ -71,6 +71,58 @@ CARDS = [
         "table",
         {},
     ),
+    # --- E-commerce insights: customer behavior, product breadth, payment mix ---
+    ("Unique Customers", "SELECT COUNT(DISTINCT customer_id) AS unique_customers FROM analytics.sales", "scalar", {}),
+    ("Unique Products Sold", "SELECT COUNT(DISTINCT product_id) AS unique_products FROM analytics.sales", "scalar", {}),
+    (
+        "Average Items per Order",
+        "SELECT ROUND(AVG(quantity), 2) AS avg_items_per_order FROM analytics.sales",
+        "scalar",
+        {},
+    ),
+    (
+        "Repeat Customer Rate",
+        "WITH customer_counts AS ("
+        "  SELECT customer_id, COUNT(*) AS txns FROM analytics.sales GROUP BY customer_id"
+        ") "
+        "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE txns > 1) / COUNT(*), 2) AS repeat_customer_rate_pct "
+        "FROM customer_counts",
+        "scalar",
+        {},
+    ),
+    (
+        "Revenue by Payment Method",
+        "SELECT payment_method, SUM(revenue) AS revenue FROM analytics.sales "
+        "GROUP BY payment_method ORDER BY revenue DESC",
+        "bar",
+        {"graph.dimensions": ["payment_method"], "graph.metrics": ["revenue"]},
+    ),
+    (
+        "Average Order Value Over Time",
+        "SELECT make_date(sales_year, sales_month, 1) AS month, ROUND(AVG(revenue), 2) AS avg_order_value "
+        "FROM analytics.sales GROUP BY sales_year, sales_month ORDER BY month",
+        "line",
+        {"graph.dimensions": ["month"], "graph.metrics": ["avg_order_value"]},
+    ),
+    (
+        "Top Customers by Revenue",
+        "SELECT customer_id, SUM(revenue) AS revenue, COUNT(*) AS transactions FROM analytics.sales "
+        "GROUP BY customer_id ORDER BY revenue DESC LIMIT 10",
+        "table",
+        {},
+    ),
+    (
+        "New vs Repeat Customer Revenue",
+        "WITH first_purchase AS ("
+        "  SELECT customer_id, MIN(transaction_date) AS first_date FROM analytics.sales GROUP BY customer_id"
+        ") "
+        "SELECT CASE WHEN s.transaction_date = fp.first_date THEN 'New' ELSE 'Repeat' END AS customer_type, "
+        "SUM(s.revenue) AS revenue "
+        "FROM analytics.sales s JOIN first_purchase fp ON s.customer_id = fp.customer_id "
+        "GROUP BY customer_type",
+        "bar",
+        {"graph.dimensions": ["customer_type"], "graph.metrics": ["revenue"]},
+    ),
 ]
 
 # 2-column KPI row, then one chart per row.
@@ -83,6 +135,15 @@ LAYOUT = [
     {"row": 9, "col": 0, "size_x": 8, "size_y": 6},
     {"row": 9, "col": 8, "size_x": 8, "size_y": 6},
     {"row": 15, "col": 0, "size_x": 16, "size_y": 6},
+    # E-commerce insights section, continuing below the revenue section
+    {"row": 21, "col": 0, "size_x": 4, "size_y": 3},
+    {"row": 21, "col": 4, "size_x": 4, "size_y": 3},
+    {"row": 21, "col": 8, "size_x": 4, "size_y": 3},
+    {"row": 21, "col": 12, "size_x": 4, "size_y": 3},
+    {"row": 24, "col": 0, "size_x": 8, "size_y": 6},
+    {"row": 24, "col": 8, "size_x": 8, "size_y": 6},
+    {"row": 30, "col": 0, "size_x": 8, "size_y": 6},
+    {"row": 30, "col": 8, "size_x": 8, "size_y": 6},
 ]
 
 
