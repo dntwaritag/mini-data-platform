@@ -128,9 +128,31 @@ def create_dashboard(metabase_url: str, headers: dict, name: str) -> int:
     return dashboard_id
 
 
-def add_card_to_dashboard(metabase_url: str, headers: dict, dashboard_id: int, card_id: int, layout: dict) -> None:
-    payload = {"cardId": card_id, **layout}
-    resp = requests.post(f"{metabase_url}/api/dashboard/{dashboard_id}/cards", headers=headers, json=payload, timeout=15)
+def add_cards_to_dashboard(metabase_url: str, headers: dict, dashboard_id: int, card_ids: list[int], layouts: list[dict]) -> None:
+    """Metabase v0.50 removed the old POST /api/dashboard/:id/cards
+    per-card endpoint; the current way to lay out a dashboard is a single
+    bulk PUT to /api/dashboard/:id with a `dashcards` array. Each new
+    dashcard gets a synthetic negative `id` (Metabase's convention for
+    "not yet persisted" rows in this payload)."""
+    dashcards = []
+    for i, (card_id, layout) in enumerate(zip(card_ids, layouts), start=1):
+        dashcards.append(
+            {
+                "id": -i,
+                "card_id": card_id,
+                "row": layout["row"],
+                "col": layout["col"],
+                "size_x": layout["size_x"],
+                "size_y": layout["size_y"],
+                "series": [],
+                "parameter_mappings": [],
+                "visualization_settings": {},
+            }
+        )
+
+    resp = requests.put(
+        f"{metabase_url}/api/dashboard/{dashboard_id}", headers=headers, json={"dashcards": dashcards}, timeout=30
+    )
     resp.raise_for_status()
 
 
@@ -165,8 +187,7 @@ def main(argv: list[str] | None = None) -> None:
 
         dashboard_id = create_dashboard(args.metabase_url, headers, DASHBOARD_NAME)
 
-        for card_id, layout in zip(card_ids, LAYOUT):
-            add_card_to_dashboard(args.metabase_url, headers, dashboard_id, card_id, layout)
+        add_cards_to_dashboard(args.metabase_url, headers, dashboard_id, card_ids, LAYOUT)
 
     except requests.RequestException as exc:
         body = getattr(exc.response, "text", "")[:500] if getattr(exc, "response", None) is not None else ""
