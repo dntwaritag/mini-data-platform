@@ -209,9 +209,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admin-password", default=os.environ.get("METABASE_ADMIN_PASSWORD", "ChangeMe123!"))
     parser.add_argument("--db-host", default=os.environ.get("ANALYTICS_DB_HOST", "postgres"))
     parser.add_argument("--db-port", type=int, default=int(os.environ.get("ANALYTICS_DB_PORT", "5432")))
-    parser.add_argument("--db-name", default=os.environ.get("ANALYTICS_DB_NAME", "mini_data_platform"))
-    parser.add_argument("--db-user", default=os.environ.get("ANALYTICS_DB_USER", "platform_user"))
-    parser.add_argument("--db-password", default=os.environ.get("ANALYTICS_DB_PASSWORD", "platform_pass"))
+    parser.add_argument(
+        "--db-name", default=os.environ.get("POSTGRES_DB", os.environ.get("ANALYTICS_DB_NAME", "mini_data_platform"))
+    )
+    parser.add_argument(
+        "--db-user", default=os.environ.get("POSTGRES_USER", os.environ.get("ANALYTICS_DB_USER", "platform_user"))
+    )
+    parser.add_argument(
+        "--db-password",
+        default=os.environ.get("POSTGRES_PASSWORD", os.environ.get("ANALYTICS_DB_PASSWORD", "platform_pass")),
+    )
     return parser
 
 
