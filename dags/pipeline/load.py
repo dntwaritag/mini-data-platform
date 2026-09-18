@@ -69,7 +69,11 @@ def load_records(records: list[tuple], conn=None) -> int:
     conn = conn or get_connection()
     try:
         with conn.cursor() as cur:
-            psycopg2.extras.execute_values(cur, UPSERT_SQL, records)
+            # page_size default is 100, meaning 500k rows would be 5,000
+            # separate round-trips to Postgres — bump it so large batches
+            # (demo runs with ROWS=500000 etc.) load in a handful of
+            # multi-thousand-row statements instead.
+            psycopg2.extras.execute_values(cur, UPSERT_SQL, records, page_size=5000)
         conn.commit()
         return len(records)
     finally:
