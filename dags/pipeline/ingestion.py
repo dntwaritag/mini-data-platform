@@ -81,8 +81,19 @@ def download_file(object_key: str, client: Minio | None = None, bucket: str | No
 
 def mark_processed(object_key: str, client: Minio | None = None, bucket: str | None = None) -> None:
     """Move an object from `incoming/` to `processed/` so it is not
-    re-ingested on the next DAG run."""
+    re-ingested on the next DAG run.
+
+    Treats "object already gone from incoming/" as success, not failure:
+    with concurrent DAG runs (e.g. several manual triggers close together)
+    it's possible for two runs to pick up the same object before either has
+    moved it. Both loads are safe (the Postgres load is an idempotent
+    UPSERT), but only one run will win the race to actually move the file.
+    The losing run finding NoSuchKey here means the goal state — the file
+    is no longer sitting in incoming/ — was already achieved by the other
+    run, so this is a no-op, not an error.
+    """
     from minio.commonconfig import CopySource
+    from minio.error import S3Error
 
     client = client or get_minio_client()
     bucket = bucket or get_bucket_name()
@@ -90,6 +101,16 @@ def mark_processed(object_key: str, client: Minio | None = None, bucket: str | N
     filename = os.path.basename(object_key)
     dest_key = f"{PROCESSED_PREFIX}{filename}"
 
-    client.copy_object(bucket, dest_key, CopySource(bucket, object_key))
-    client.remove_object(bucket, object_key)
-    logger.info("Moved %s -> %s", object_key, dest_key)
+    try:
+        client.copy_object(bucket, dest_key, CopySource(bucket, object_key))
+        client.remove_object(bucket, object_key)
+        logger.info("Moved %s -> %s", object_key, dest_key)
+    except S3Error as exc:
+        if exc.code == "NoSuchKey":
+            logger.warning(
+                "%s was already moved out of incoming/ (likely a concurrent DAG run finished first) — "
+                "treating as already finalized, not an error.",
+                object_key,
+            )
+            return
+        raise
